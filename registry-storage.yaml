@@ -1,0 +1,8 @@
+s3:
+  accesskey: gitlab-s3
+  secretkey: REDACTED
+  region: us-east-1
+  regionendpoint: http://seaweedfs-s3.storage.svc.cluster.local:8333
+  v4auth: true
+  pathstyle: true
+  bucket: gitlab-registry

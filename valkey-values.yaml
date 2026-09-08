@@ -1,0 +1,10 @@
+auth:
+  enabled: true
+  usersExistingSecret: valkey-users
+  aclUsers:
+    default:
+      permissions: "~* &* +@all"
+
+dataStorage:
+  enabled: true
+  requestedSize: 5Gi

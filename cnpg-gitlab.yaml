@@ -1,0 +1,23 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: gitlab-db
+  namespace: gitlab
+spec:
+  instances: 1
+
+  imageName: ghcr.io/cloudnative-pg/postgresql:17
+
+  bootstrap:
+    initdb:
+      database: gitlabhq_production
+      owner: gitlab
+      secret:
+        name: gitlab-db-app
+      postInitApplicationSQL:
+        - CREATE EXTENSION IF NOT EXISTS pg_trgm
+        - CREATE EXTENSION IF NOT EXISTS btree_gist
+        - CREATE EXTENSION IF NOT EXISTS amcheck
+
+  storage:
+    size: 100Gi

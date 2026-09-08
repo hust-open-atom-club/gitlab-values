@@ -1,0 +1,41 @@
+master:
+  replicas: 1
+  affinity: ""
+  data:
+    type: persistentVolumeClaim
+    size: 1Gi
+
+volume:
+  replicas: 1
+  affinity: ""
+  idx:
+    type: persistentVolumeClaim
+    size: "10Gi"
+  dataDirs:
+    - name: data
+      type: persistentVolumeClaim
+      size: 20Ti
+      maxVolumes: 0
+
+filer:
+  replicas: 1
+  affinity: ""
+  data:
+    type: persistentVolumeClaim
+    size: 10Gi
+
+s3:
+  enabled: true
+  replicas: 1
+  affinity: ""
+  enableAuth: true
+  existingConfigSecret: seaweedfs-s3
+
+  createBuckets:
+    - name: gitlab-artifacts
+    - name: gitlab-lfs
+    - name: gitlab-uploads
+    - name: gitlab-packages
+    - name: gitlab-backups
+    - name: gitlab-backups-tmp
+    - name: gitlab-runner-cache

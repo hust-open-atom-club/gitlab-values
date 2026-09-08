@@ -1,0 +1,8 @@
+provider: AWS
+region: us-east-1
+aws_access_key_id: gitlab-s3
+aws_secret_access_key: REDACTED
+aws_signature_version: 4
+host: seaweedfs-s3.storage.svc.cluster.local
+endpoint: "http://seaweedfs-s3.storage.svc.cluster.local:8333"
+path_style: true

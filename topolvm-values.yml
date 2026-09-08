@@ -1,0 +1,22 @@
+controller:
+  replicaCount: 1
+
+lvmd:
+  managed: true
+  socketName: /run/topolvm/lvmd.sock
+  deviceClasses:
+    - name: k3s_topolvm
+      volume-group: k3s_topolvm
+      default: true
+      spare-gb: 10
+
+cert-manager:
+  enabled: true
+
+storageClasses:
+  - name: topolvm-provisioner
+    storageClass:
+      fsType: ext4
+      isDefaultClass: true
+      volumeBindingMode: WaitForFirstConsumer
+      allowVolumeExpansion: true

@@ -1,0 +1,18 @@
+{
+  "identities": [
+    {
+      "name": "gitlab",
+      "credentials": [
+        {
+          "accessKey": "gitlab-s3",
+          "secretKey": "REDACTED"
+        }
+      ],
+      "actions": [
+        "Admin",
+        "Read",
+        "Write"
+      ]
+    }
+  ]
+}
