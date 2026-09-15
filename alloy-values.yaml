@@ -1,0 +1,96 @@
+controller:
+  type: deployment
+  replicas: 1
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+
+alloy:
+  configMap:
+    create: true
+    content: |-
+      logging {
+        level = "info"
+      }
+
+      discovery.kubernetes "traefik" {
+        role = "pod"
+
+        namespaces {
+          names = ["kube-system"]
+        }
+
+        selectors {
+          role  = "pod"
+          label = "app.kubernetes.io/name=traefik"
+        }
+      }
+
+      discovery.relabel "traefik" {
+        targets = discovery.kubernetes.traefik.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          regex         = "traefik"
+          action        = "keep"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+
+        rule {
+          target_label = "job"
+          replacement  = "traefik-access"
+        }
+      }
+
+      loki.source.kubernetes "traefik" {
+        targets    = discovery.relabel.traefik.output
+        forward_to = [loki.process.traefik.receiver]
+      }
+
+      loki.process "traefik" {
+        // 只保留 access log，排除 Traefik 自身运行日志。
+        stage.match {
+          selector = `{job="traefik-access"} != "\"RequestMethod\""`
+          action   = "drop"
+        }
+
+        // 提取客户端 IP；不将它添加为 Loki 索引标签。
+        stage.json {
+          expressions = {
+            client_ip = "ClientHost",
+          }
+        }
+
+        // 排除 10.0.0.0/8，也兼容 ::ffff:10.x.x.x 表示。
+        stage.drop {
+          source              = "client_ip"
+          expression          = "^(::ffff:)?10\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}$"
+          drop_counter_reason = "internal_client_10_8"
+        }
+
+        forward_to = [loki.write.default.receiver]
+      }
+
+
+      loki.write "default" {
+        endpoint {
+          url = "http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push"
+        }
+      }

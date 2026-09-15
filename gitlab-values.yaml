@@ -127,6 +127,10 @@ gitlab:
   webservice:
     metrics:
       enabled: true
+    monitoring:
+        # Monitoring IP allowlist
+        ipWhitelist:
+          - 10.0.0.0/8
   sidekiq:
     metrics:
       enabled: true

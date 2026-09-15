@@ -1,0 +1,80 @@
+deploymentMode: Monolithic
+
+loki:
+  # 仅适用于受信任的集群内访问
+  auth_enabled: false
+
+  commonConfig:
+    path_prefix: /var/loki
+    replication_factor: 1
+
+  schemaConfig:
+    configs:
+      # 用于全新部署；已有 Loki 不要直接修改历史 schema
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+
+  storage:
+    type: filesystem
+    filesystem:
+      chunks_directory: /var/loki/chunks
+      rules_directory: /var/loki/rules
+
+  limits_config:
+    # 180 天
+    retention_period: 4320h
+    allow_structured_metadata: true
+
+  compactor:
+    working_directory: /var/loki/compactor
+    compaction_interval: 10m
+    retention_enabled: true
+    retention_delete_delay: 2h
+    retention_delete_worker_count: 20
+    delete_request_store: filesystem
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 100Gi
+
+# 关闭其他部署模式的独立组件
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+ingester:
+  replicas: 0
+querier:
+  replicas: 0
+queryFrontend:
+  replicas: 0
+queryScheduler:
+  replicas: 0
+distributor:
+  replicas: 0
+compactor:
+  replicas: 0
+indexGateway:
+  replicas: 0
+
+# 小规模部署先关闭额外缓存，降低资源占用
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+minio:
+  enabled: false
+
+gateway:
+  enabled: true
