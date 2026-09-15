@@ -1,5 +1,13 @@
 controller:
   replicaCount: 1
+  metrics:
+    enabled: true
+  prometheus:
+    podMonitor:
+      enabled: true
+      namespace: monitoring
+      labels:
+        release: monitoring
 
 lvmd:
   managed: true
@@ -9,6 +17,16 @@ lvmd:
       volume-group: k3s_topolvm
       default: true
       spare-gb: 10
+
+node:
+  metrics:
+    enabled: true
+  prometheus:
+    podMonitor:
+      enabled: true
+      namespace: monitoring   # 可选，指定 PodMonitor 放在哪个 ns
+      labels:
+        release: monitoring   # 匹配你 kube-prometheus-stack 的 selector
 
 cert-manager:
   enabled: false

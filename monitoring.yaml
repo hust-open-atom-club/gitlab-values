@@ -1,3 +1,15 @@
+# ============================================================
+# namespace 对照：
+#   gitlab / valkey / cnpg  -> namespace: gitlab
+#   seaweedfs               -> namespace: storage
+# kube-prometheus-stack release 假设为 "monitoring"
+#   (Prometheus CR selector label: release: monitoring)
+# 所有 port 字段均已根据实际 kubectl get svc 输出核实
+# ============================================================
+
+---
+# ---------- GitLab: webservice ----------
+# Service: gitlab-webservice-default, metrics 端口名: http-metrics-ws (8083)
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -12,22 +24,214 @@ spec:
   selector:
     matchLabels:
       app: webservice
+      release: gitlab
   endpoints:
-    - port: http-workhorse
+    - port: http-metrics-ws
+      path: /metrics
+      interval: 30s
+
+---
+# ---------- GitLab: gitaly ----------
+# Service: gitlab-gitaly, metrics 端口名: http-metrics (9236)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gitlab-gitaly
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - gitlab
+  selector:
+    matchLabels:
+      app: gitaly
+      release: gitlab
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 30s
+
+---
+# ---------- GitLab: gitlab-exporter (业务层指标) ----------
+# Service: gitlab-gitlab-exporter, metrics 端口名: http-metrics (9168)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gitlab-exporter
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - gitlab
+  selector:
+    matchLabels:
+      app: gitlab-exporter
+      release: gitlab
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 30s
+
+---
+# ---------- GitLab: registry ----------
+# !! 当前 gitlab-registry Service 只有 http-registry(5000) 端口 !!
+# !! 说明 registry metrics 尚未开启，需先在 values.yaml 加: !!
+#   registry:
+#     metrics:
+#       enabled: true
+# 开启后 Service 会新增一个 metrics 端口(通常是 5001)，
+# 再取消下面注释并确认端口名后使用
+#
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gitlab-registry
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - gitlab
+  selector:
+    matchLabels:
+      app: registry
+      release: gitlab
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 30s
+---
+# ---------- Valkey ----------
+# Service: valkey-metrics, metrics 端口名: metrics (9121)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: valkey-metrics
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - gitlab
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: valkey
+      app.kubernetes.io/component: metrics
+      app.kubernetes.io/instance: valkey
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+
+---
+# ---------- SeaweedFS: master (namespace: storage) ----------
+# Service: seaweedfs-master, metrics 端口名: metrics (9327)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: seaweedfs-master
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - storage
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: seaweedfs
+      app.kubernetes.io/component: master
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+
+---
+# ---------- SeaweedFS: volume (namespace: storage) ----------
+# Service: seaweedfs-volume, metrics 端口名: metrics (9327)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: seaweedfs-volume
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - storage
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: seaweedfs
+      app.kubernetes.io/component: volume
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+
+---
+# ---------- SeaweedFS: filer (namespace: storage) ----------
+# Service: seaweedfs-filer, metrics 端口名: metrics (9327)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: seaweedfs-filer
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - storage
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: seaweedfs
+      app.kubernetes.io/component: filer
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+
+---
+# ---------- SeaweedFS: s3 (namespace: storage) ----------
+# Service: seaweedfs-s3, metrics 端口名: metrics (9327)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: seaweedfs-s3
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - storage
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: seaweedfs
+      app.kubernetes.io/component: s3
+  endpoints:
+    - port: metrics
       path: /metrics
       interval: 30s
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
-  name: cnpg-cluster-metrics
-  namespace: gitlab
+  name: gitlab-db-metrics
+  namespace: gitlab          # 建议放在 Cluster 所在的 gitlab namespace
   labels:
-    release: monitoring
+    release: monitoring      # 匹配 kube-prometheus-stack 的 podMonitorSelector
 spec:
   selector:
     matchLabels:
-      cnpg.io/cluster: gitlab-db
+      cnpg.io/cluster: gitlab-db   # 关键：必须用这个 label 匹配 Cluster
   podMetricsEndpoints:
-    - port: metrics
+    - port: metrics           # CNPG 固定用名为 "metrics" 的端口，对应 9187
       interval: 30s

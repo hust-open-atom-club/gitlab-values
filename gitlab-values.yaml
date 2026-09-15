@@ -124,13 +124,23 @@ gitlab:
         config:
           secret: gitlab-backup-storage
           key: config
+  webservice:
+    metrics:
+      enabled: true
+  sidekiq:
+    metrics:
+      enabled: true
 
   gitaly:
     persistence:
       size: 40Ti
+    metrics:
+      enabled: true
 
 registry:
   enabled: true
+  metrics:
+    enabled: true
   storage:
     secret: gitlab-registry-storage
     key: config
@@ -143,3 +153,9 @@ gitlab-runner:
       [[runners]]
         [runners.kubernetes]
         image = "ubuntu:26.04"
+
+gitlab-exporter:
+  enabled: true
+
+prometheus:
+  install: false
