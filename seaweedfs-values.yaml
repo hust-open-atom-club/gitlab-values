@@ -7,6 +7,7 @@ master:
   data:
     type: persistentVolumeClaim
     size: 1Gi
+  metricsPort: 9327
 
 volume:
   replicas: 1
@@ -19,6 +20,7 @@ volume:
       type: persistentVolumeClaim
       size: 20Ti
       maxVolumes: 0
+  metricsPort: 9327
 
 filer:
   replicas: 1
@@ -26,6 +28,7 @@ filer:
   data:
     type: persistentVolumeClaim
     size: 10Gi
+  metricsPort: 9327
 
 s3:
   enabled: true
@@ -33,6 +36,7 @@ s3:
   affinity: ""
   enableAuth: true
   existingConfigSecret: seaweedfs-s3
+  metricsPort: 9327
 
   createBuckets:
     - name: gitlab-artifacts

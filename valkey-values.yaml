@@ -8,3 +8,12 @@ auth:
 dataStorage:
   enabled: true
   requestedSize: 5Gi
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+    labels:
+      release: monitoring
+    interval: 30s
