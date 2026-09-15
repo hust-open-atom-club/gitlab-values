@@ -1,0 +1,21 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: gitlab-cert-issuer
+  namespace: gitlab
+spec:
+  acme:
+    email: REDACTED
+    server: https://acme.litessl.com/acme/v2/directory
+    privateKeySecretRef:
+      name: acme-issuer-account-key
+    externalAccountBinding:
+      keyID: REDACTED
+      keySecretRef:
+        name: eab-secret
+        key: secret
+    solvers:
+    - dns01:
+          webhook:
+            groupName: git.hust.edu.cn
+            solverName: lark

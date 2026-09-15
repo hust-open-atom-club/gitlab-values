@@ -3,10 +3,10 @@ global:
   time_zone: Asia/Shanghai
 
   hosts:
-    domain: intra.example.com
-    externalIP: 192.168.10.20
+    domain: git.hust.edu.cn
+    externalIP: REDACTED
     https: true
-    ssh: gitlab.intra.example.com
+    ssh: git.hust.edu.cn
 
   shell:
     port: 32022
@@ -25,7 +25,23 @@ global:
       traefik.ingress.kubernetes.io/router.entrypoints: websecure
     tls:
       enabled: true
-      secretName: gitlab-wildcard-tls
+      secretName: gitlab-cert-tls
+
+  email:
+    display_name: HUST Open Source GitLab
+    from: noreply-git@openatom.club
+    reply_to: noreply-git@openatom.club
+
+  smtp:
+    enabled: true
+    address: smtp.feishu.cn
+    authentication: login
+    port: 465
+    user_name: noreply-git@openatom.club
+    password:
+      secret: gitlab-smtp-password
+      key: password
+
 
   psql:
     host: gitlab-db-rw.gitlab.svc.cluster.local
@@ -89,7 +105,7 @@ traefik:
   install: false
 
 gitlab-runner:
-  install: false
+  install: true
 
 gitlab:
   toolbox:
@@ -102,7 +118,7 @@ gitlab:
 
   gitaly:
     persistence:
-      size: 80Ti
+      size: 40Ti
 
 registry:
   enabled: true

@@ -11,7 +11,7 @@ lvmd:
       spare-gb: 10
 
 cert-manager:
-  enabled: true
+  enabled: false
 
 storageClasses:
   - name: topolvm-provisioner
