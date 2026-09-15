@@ -4,9 +4,13 @@ global:
 
   hosts:
     domain: git.hust.edu.cn
+    gitlab:
+      name: git.hust.edu.cn
+    registry:
+      name: registry.git.hust.edu.cn
+    ssh: git.hust.edu.cn
     externalIP: REDACTED
     https: true
-    ssh: git.hust.edu.cn
 
   shell:
     port: 32022
@@ -68,6 +72,13 @@ global:
       connection:
         secret: gitlab-object-storage
         key: connection
+    omniauth:
+      enabled: true
+      allowSingleSignOn: ['openid_connect']
+      blockAutoCreatedUsers: false
+      autoLinkUser: true
+      providers:
+        - secret: gitlab-hoac-oidc
 
     artifacts:
       bucket: gitlab-artifacts
@@ -127,6 +138,7 @@ registry:
 gitlab-runner:
   enabled: true
   runners:
+    privileged: true
     config: |
       [[runners]]
         [runners.kubernetes]
