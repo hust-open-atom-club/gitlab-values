@@ -25,6 +25,7 @@ UPSTREAM_URL = "https://pass.hust.edu.cn/cas/oauth2.0/profile"
 EMAIL_DOMAIN = "@hust.edu.cn"
 UPSTREAM_TIMEOUT_SECONDS = 10
 
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("oauth2_proxy")
 
@@ -39,7 +40,8 @@ class ProfileProxyHandler(BaseHTTPRequestHandler):
         self._handle_request("POST")
 
     def _handle_request(self, method: str) -> None:
-        if self.path != PROXY_PATH:
+        request_path, _, query_string = self.path.partition("?")
+        if request_path != PROXY_PATH:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
 
@@ -49,7 +51,7 @@ class ProfileProxyHandler(BaseHTTPRequestHandler):
             body = self.rfile.read(int(content_length))
 
         try:
-            upstream_json = self._forward_to_upstream(method, body)
+            upstream_json = self._forward_to_upstream(method, query_string, body)
         except HTTPError as exc:
             logger.warning("上游返回错误状态码: %s", exc.code)
             self._send_json(exc.code, {"error": f"upstream error: {exc.code}"})
@@ -72,15 +74,22 @@ class ProfileProxyHandler(BaseHTTPRequestHandler):
         upstream_json["email"] = f"{profile_id}{EMAIL_DOMAIN}"
         self._send_json(HTTPStatus.OK, upstream_json)
 
-    def _forward_to_upstream(self, method: str, body: bytes | None) -> dict:
-        # 转发调用方携带的 Authorization 等鉴权头，保证上游能识别用户身份。
+    def _forward_to_upstream(self, method: str, query_string: str, body: bytes | None) -> dict:
+        # access token 可能放在 query string 里（例如 ?access_token=xxx），
+        # 原样拼到上游 URL 上转发；如果调用方没带 query string 就不加。
+        upstream_url = UPSTREAM_BASE_URL
+        if query_string:
+            upstream_url = f"{UPSTREAM_BASE_URL}?{query_string}"
+
+        # access token 也可能放在 Authorization 请求头里，同样原样转发
+        # （去掉 Host/Content-Length，避免和目标主机及请求体长度冲突）。
         forward_headers = {
             key: value
             for key, value in self.headers.items()
             if key.lower() not in ("host", "content-length")
         }
 
-        request = Request(UPSTREAM_URL, data=body, headers=forward_headers, method=method)
+        request = Request(upstream_url, data=body, headers=forward_headers, method=method)
         with urlopen(request, timeout=UPSTREAM_TIMEOUT_SECONDS) as response:
             raw = response.read()
         return json.loads(raw)
@@ -99,7 +108,12 @@ class ProfileProxyHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), ProfileProxyHandler)
-    logger.info("代理服务已启动，监听端口 %d，转发 %s -> %s", LISTEN_PORT, PROXY_PATH, UPSTREAM_URL)
+    logger.info(
+        "代理服务已启动，监听端口 %d，转发 %s -> %s（同时支持 header 和 query string 传递 token）",
+        LISTEN_PORT,
+        PROXY_PATH,
+        UPSTREAM_BASE_URL,
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
