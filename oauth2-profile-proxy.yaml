@@ -6,10 +6,11 @@
 #   2. Deployment  oauth2-profile-proxy          用 python:3-alpine 直接跑脚本
 #   3. Service     oauth2-profile-proxy          ClusterIP:8000，暴露给集群内部
 #   4. IngressRoute oauth2-profile-proxy         让 Traefik 把
-#      https://git.hust.edu.cn/users/auth/oauth2_generic/profile 转发到
-#      这个 Service，而不是转发给 GitLab webservice
+#      https://git.hust.edu.cn/users/auth/oauth2_generic/profile 和
+#      https://git.hust.edu.cn/users/auth/oauth2_generic/accessToken
+#      都转发到这个 Service，而不是转发给 GitLab webservice
 #
-# token 传递方式：
+# profile 接口 token 传递方式：
 #   GitLab webservice（omniauth-oauth2-generic + oauth2 gem）默认会把
 #   access token 放在 Authorization: Bearer <token> 请求头里发起请求，
 #   但这个上游（pass.hust.edu.cn CAS）只认 query string 里的
@@ -17,13 +18,21 @@
 #   头还是 query string），再以 query 参数的形式转发给上游，不再转发
 #   原始 Authorization 头。
 #
+# accessToken 接口 client 认证传递方式：
+#   GitLab（oauth2 gem 默认的 basic_auth 模式）把 client_id/client_secret
+#   放在 Authorization: Basic <base64> 请求头里，但上游只认 POST form
+#   body 里的 client_id/client_secret 字段。本脚本会解出 Authorization
+#   头里的凭证，合并进表单 body 再转发，并把上游原始响应透传回 GitLab。
+#
 # 部署前必须确认的事：
 #   - ConfigMap 里的 UPSTREAM_URL 目前是 https://pass.hust.edu.cn/cas/oauth2.0/profile，
-#     确认这就是最终地址
+#     ACCESS_TOKEN_UPSTREAM_URL 目前是 https://pass.hust.edu.cn/cas/oauth2.0/accessToken，
+#     确认这两个都是最终地址
 #   - EMAIL_DOMAIN 目前是 @hust.edu.cn，确认这是你要用的邮箱域名
 #   - 之后在 GitLab 的 oauth2_generic provider 配置里，把
-#     user_info_url 指向 https://git.hust.edu.cn/users/auth/oauth2_generic/profile
-#     （GitLab webservice 是直接对外发起这条 HTTP 请求，会走公网 DNS
+#     user_info_url 指向 https://git.hust.edu.cn/users/auth/oauth2_generic/profile，
+#     token_url 指向 https://git.hust.edu.cn/users/auth/oauth2_generic/accessToken
+#     （GitLab webservice 是直接对外发起这两条 HTTP 请求，会走公网 DNS
 #     解析回你们自己的 Traefik，再被下面的 IngressRoute 拦截转发到这个
 #     代理 Service，不会影响 /users/auth/oauth2_generic/callback 这条
 #     登录回调路径，那条路径仍然正常交给 GitLab webservice 处理）
@@ -40,9 +49,13 @@ data:
     """
     OAuth2 中间层代理脚本。
 
-    监听本机 8000 端口，接收对 /api/profile 的请求，转发到
-    上游 profile 接口，并在返回的 JSON 中根据 id 字段补充一个
-    email 字段（id + EMAIL_DOMAIN），最后把结果返回给调用方。
+    监听本机 8000 端口，提供两个接口：
+
+    1. profile 接口：接收对 PROXY_PATH 的请求，转发到上游 profile 接口，
+       并在返回的 JSON 中根据 id 字段补充一个 email 字段
+       （id + EMAIL_DOMAIN），最后把结果返回给调用方。
+    2. accessToken 接口：接收对 ACCESS_TOKEN_PATH 的请求，转发到上游
+       accessToken 换取接口，原样透传响应。
 
     调用方（GitLab webservice）传 access token 的方式可能是
     Authorization: Bearer <token> 请求头，也可能是 query string 里的
@@ -50,23 +63,34 @@ data:
     不认 Authorization 头，所以本脚本会统一提取 token（不管它来自请求
     头还是 query），再以 query 参数的形式转发给上游。
 
+    另外还监听 accessToken 换取接口：GitLab（oauth2 gem 默认的
+    basic_auth 模式）会把 client_id/client_secret 放在
+    Authorization: Basic <base64(client_id:client_secret)> 请求头里，
+    但对接的鉴权服务器只认 POST form body 里的 client_id/client_secret
+    字段。本脚本会从 Authorization 头解出这两个值，合并进原始表单
+    body（grant_type/code/redirect_uri 等字段不变），再转发给上游，
+    并把上游的原始响应（状态码、Content-Type、body）直接透传给 GitLab。
+
     仅使用标准库实现，无需额外安装依赖。
     """
 
     from __future__ import annotations
 
+    import base64
     import json
     import logging
     from http import HTTPStatus
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.error import HTTPError, URLError
-    from urllib.parse import parse_qs, urlencode
+    from urllib.parse import parse_qs, parse_qsl, urlencode
     from urllib.request import Request, urlopen
 
     LISTEN_PORT = 8000
     PROXY_PATH = "/users/auth/oauth2_generic/profile"
+    ACCESS_TOKEN_PATH = "/users/auth/oauth2_generic/accessToken"
     HEALTHZ_PATH = "/healthz"
     UPSTREAM_URL = "https://pass.hust.edu.cn/cas/oauth2.0/profile"
+    ACCESS_TOKEN_UPSTREAM_URL = "https://pass.hust.edu.cn/cas/oauth2.0/accessToken"
     ACCESS_TOKEN_PARAM = "access_token"
     EMAIL_DOMAIN = "@hust.edu.cn"
     UPSTREAM_TIMEOUT_SECONDS = 10
@@ -92,14 +116,18 @@ data:
                 self._send_json(HTTPStatus.OK, {"status": "ok"})
                 return
 
-            if request_path != PROXY_PATH:
-                self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-                return
-
             body = None
             content_length = self.headers.get("Content-Length")
             if content_length:
                 body = self.rfile.read(int(content_length))
+
+            if request_path == ACCESS_TOKEN_PATH:
+                self._handle_access_token_request(body)
+                return
+
+            if request_path != PROXY_PATH:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
 
             access_token = self._extract_access_token(query_string)
             if not access_token:
@@ -163,6 +191,74 @@ data:
                 raw = response.read()
             return json.loads(raw)
 
+        def _handle_access_token_request(self, body: bytes | None) -> None:
+            """
+            将 GitLab 发来的 accessToken 换取请求转发给上游鉴权服务器。
+
+            GitLab（oauth2 gem 的 basic_auth 模式）把 client_id/client_secret
+            放在 Authorization: Basic 请求头里；上游只认 POST form body 里的
+            client_id/client_secret 字段。这里把两者合并后再转发，并把上游
+            的原始响应状态码/Content-Type/body 直接透传回 GitLab。
+            """
+            credentials = self._extract_basic_auth_credentials()
+            if credentials is None:
+                logger.warning("accessToken 请求缺少合法的 Authorization: Basic 头")
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "missing or invalid client credentials"})
+                return
+            client_id, client_secret = credentials
+
+            form_fields = parse_qsl((body or b"").decode("utf-8"), keep_blank_values=True)
+            form_fields = [(k, v) for k, v in form_fields if k not in ("client_id", "client_secret")]
+            form_fields.append(("client_id", client_id))
+            form_fields.append(("client_secret", client_secret))
+            new_body = urlencode(form_fields).encode("utf-8")
+
+            forward_headers = {
+                key: value
+                for key, value in self.headers.items()
+                if key.lower() not in ("host", "content-length", "authorization")
+            }
+            forward_headers["Content-Type"] = "application/x-www-form-urlencoded"
+            forward_headers["Content-Length"] = str(len(new_body))
+
+            request = Request(
+                ACCESS_TOKEN_UPSTREAM_URL, data=new_body, headers=forward_headers, method="POST"
+            )
+            try:
+                with urlopen(request, timeout=UPSTREAM_TIMEOUT_SECONDS) as response:
+                    self._send_raw(response.status, response.getheader("Content-Type"), response.read())
+            except HTTPError as exc:
+                logger.warning("accessToken 上游返回错误状态码: %s", exc.code)
+                self._send_raw(exc.code, exc.headers.get("Content-Type"), exc.read())
+            except URLError as exc:
+                logger.error("请求 accessToken 上游失败: %s", exc)
+                self._send_json(HTTPStatus.BAD_GATEWAY, {"error": "failed to reach upstream"})
+
+        def _extract_basic_auth_credentials(self) -> tuple[str, str] | None:
+            """从 Authorization: Basic 头解出 (client_id, client_secret)。"""
+            auth_header = self.headers.get("Authorization", "")
+            if not auth_header.lower().startswith("basic "):
+                return None
+            encoded = auth_header[len("Basic "):].strip()
+            try:
+                decoded = base64.b64decode(encoded).decode("utf-8")
+            except (ValueError, UnicodeDecodeError):
+                return None
+            if ":" not in decoded:
+                return None
+            client_id, _, client_secret = decoded.partition(":")
+            if not client_id or not client_secret:
+                return None
+            return client_id, client_secret
+
+        def _send_raw(self, status: int, content_type: str | None, data: bytes) -> None:
+            """原样透传上游响应（用于 accessToken 换取接口，不做 JSON 解析或改写）。"""
+            self.send_response(status)
+            self.send_header("Content-Type", content_type or "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def _send_json(self, status: HTTPStatus, payload: dict) -> None:
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
@@ -178,10 +274,12 @@ data:
     def main() -> None:
         server = ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), ProfileProxyHandler)
         logger.info(
-            "代理服务已启动，监听端口 %d，转发 %s -> %s（access token 统一转发到上游 query string 中）",
+            "代理服务已启动，监听端口 %d；%s -> %s（token 转发到 query string）；%s -> %s（client 认证转发到 form body）",
             LISTEN_PORT,
             PROXY_PATH,
             UPSTREAM_URL,
+            ACCESS_TOKEN_PATH,
+            ACCESS_TOKEN_UPSTREAM_URL,
         )
         try:
             server.serve_forever()
@@ -281,7 +379,7 @@ spec:
   entryPoints:
     - websecure
   routes:
-    - match: Host(`git.hust.edu.cn`) && PathPrefix(`/users/auth/oauth2_generic/profile`)
+    - match: Host(`git.hust.edu.cn`) && ( PathPrefix(`/users/auth/oauth2_generic/profile`) || PathPrefix(`/users/auth/oauth2_generic/accessToken`) )
       kind: Rule
       priority: 100
       services:
