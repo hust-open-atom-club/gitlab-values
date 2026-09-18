@@ -1,43 +1,3 @@
-# ------------------------------------------------------------------
-# OAuth2 profile 中间层代理 —— 部署到 gitlab 命名空间
-#
-# 组成：
-#   1. ConfigMap   oauth2-profile-proxy-script  挂载 python 脚本本身
-#   2. Deployment  oauth2-profile-proxy          用 python:3-alpine 直接跑脚本
-#   3. Service     oauth2-profile-proxy          ClusterIP:8000，暴露给集群内部
-#   4. IngressRoute oauth2-profile-proxy         让 Traefik 把
-#      https://git.hust.edu.cn/users/auth/oauth2_generic/profile 和
-#      https://git.hust.edu.cn/users/auth/oauth2_generic/accessToken
-#      都转发到这个 Service，而不是转发给 GitLab webservice
-#
-# profile 接口 token 传递方式：
-#   GitLab webservice（omniauth-oauth2-generic + oauth2 gem）默认会把
-#   access token 放在 Authorization: Bearer <token> 请求头里发起请求，
-#   但这个上游（pass.hust.edu.cn CAS）只认 query string 里的
-#   access_token 参数。本脚本会统一提取 token（不管它来自 Authorization
-#   头还是 query string），再以 query 参数的形式转发给上游，不再转发
-#   原始 Authorization 头。
-#
-# accessToken 接口 client 认证传递方式：
-#   GitLab（oauth2 gem 默认的 basic_auth 模式）把 client_id/client_secret
-#   放在 Authorization: Basic <base64> 请求头里，但上游只认 POST form
-#   body 里的 client_id/client_secret 字段。本脚本会解出 Authorization
-#   头里的凭证，合并进表单 body 再转发，并把上游原始响应透传回 GitLab。
-#
-# 部署前必须确认的事：
-#   - ConfigMap 里的 UPSTREAM_URL 目前是 https://pass.hust.edu.cn/cas/oauth2.0/profile，
-#     ACCESS_TOKEN_UPSTREAM_URL 目前是 https://pass.hust.edu.cn/cas/oauth2.0/accessToken，
-#     确认这两个都是最终地址
-#   - EMAIL_DOMAIN 目前是 @hust.edu.cn，确认这是你要用的邮箱域名
-#   - 之后在 GitLab 的 oauth2_generic provider 配置里，把
-#     user_info_url 指向 https://git.hust.edu.cn/users/auth/oauth2_generic/profile，
-#     token_url 指向 https://git.hust.edu.cn/users/auth/oauth2_generic/accessToken
-#     （GitLab webservice 是直接对外发起这两条 HTTP 请求，会走公网 DNS
-#     解析回你们自己的 Traefik，再被下面的 IngressRoute 拦截转发到这个
-#     代理 Service，不会影响 /users/auth/oauth2_generic/callback 这条
-#     登录回调路径，那条路径仍然正常交给 GitLab webservice 处理）
-# ------------------------------------------------------------------
-
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -46,56 +6,46 @@ metadata:
 data:
   oauth2_proxy.py: |
     #!/usr/bin/env python3
-    """
-    OAuth2 中间层代理脚本。
-
-    监听本机 8000 端口，提供两个接口：
-
-    1. profile 接口：接收对 PROXY_PATH 的请求，转发到上游 profile 接口，
-       并在返回的 JSON 中根据 id 字段补充一个 email 字段
-       （id + EMAIL_DOMAIN），最后把结果返回给调用方。
-    2. accessToken 接口：接收对 ACCESS_TOKEN_PATH 的请求，转发到上游
-       accessToken 换取接口，原样透传响应。
-
-    调用方（GitLab webservice）传 access token 的方式可能是
-    Authorization: Bearer <token> 请求头，也可能是 query string 里的
-    access_token 参数。但这个上游只认 query string 里的 access_token，
-    不认 Authorization 头，所以本脚本会统一提取 token（不管它来自请求
-    头还是 query），再以 query 参数的形式转发给上游。
-
-    另外还监听 accessToken 换取接口：GitLab（oauth2 gem 默认的
-    basic_auth 模式）会把 client_id/client_secret 放在
-    Authorization: Basic <base64(client_id:client_secret)> 请求头里，
-    但对接的鉴权服务器只认 POST form body 里的 client_id/client_secret
-    字段。本脚本会从 Authorization 头解出这两个值，合并进原始表单
-    body（grant_type/code/redirect_uri 等字段不变），再转发给上游，
-    并把上游的原始响应（状态码、Content-Type、body）直接透传给 GitLab。
-
-    仅使用标准库实现，无需额外安装依赖。
-    """
 
     from __future__ import annotations
 
     import base64
     import gzip
+    import http.client
     import json
     import logging
     import zlib
     from http import HTTPStatus
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.error import HTTPError, URLError
-    from urllib.parse import parse_qs, parse_qsl, urlencode
+    from urllib.parse import parse_qs, parse_qsl, quote, urlencode
     from urllib.request import Request, urlopen
 
     LISTEN_PORT = 8000
     PROXY_PATH = "/profile"
     ACCESS_TOKEN_PATH = "/accessToken"
+    CALLBACK_PATH = "/users/auth/oauth2_generic/callback"
     HEALTHZ_PATH = "/healthz"
     UPSTREAM_URL = "https://pass.hust.edu.cn/cas/oauth2.0/profile"
     ACCESS_TOKEN_UPSTREAM_URL = "https://pass.hust.edu.cn/cas/oauth2.0/accessToken"
     ACCESS_TOKEN_PARAM = "access_token"
     EMAIL_DOMAIN = "@hust.edu.cn"
     UPSTREAM_TIMEOUT_SECONDS = 10
+
+    # callback 为空 code 时，重定向用户重新走一遍 CAS 授权的目标地址与参数
+    CAS_AUTHORIZE_URL = "https://pass.hust.edu.cn/cas/oauth2.0/authorize"
+    CAS_CLIENT_ID = "Hustwaxygitxitong"
+    CAS_REDIRECT_URI = "https://git.hust.edu.cn/users/auth/oauth2_generic/callback"
+    CAS_SCOPE = "openid profile email"
+
+    # callback 有 code 时，代理向 GitLab webservice 内部地址发起的“冒充”请求
+    # 走的是集群内 Service DNS + 明文 HTTP（workhorse 本身不终止 TLS，TLS
+    # 是在 Traefik 层做的），但要带上 X-Forwarded-Proto/X-Forwarded-Ssl，
+    # 让 Rails 认为这条请求本来就是经 https 转发进来的（否则 Rails 生成的
+    # 跳转链接、cookie 的 Secure 标记可能不对）。
+    GITLAB_WEBSERVICE_HOST = "gitlab-webservice-default.gitlab.svc.cluster.local"
+    GITLAB_WEBSERVICE_PORT = 8181
+    EXTERNAL_HOST = "git.hust.edu.cn"
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logger = logging.getLogger("oauth2_proxy")
@@ -125,6 +75,10 @@ data:
 
             if request_path == ACCESS_TOKEN_PATH:
                 self._handle_access_token_request(body)
+                return
+
+            if request_path == CALLBACK_PATH:
+                self._handle_callback_request(query_string)
                 return
 
             if request_path != PROXY_PATH:
@@ -160,6 +114,85 @@ data:
 
             upstream_json["email"] = f"{profile_id}{EMAIL_DOMAIN}"
             self._send_json(HTTPStatus.OK, upstream_json)
+
+        def _handle_callback_request(self, query_string: str) -> None:
+            """
+            接管 CAS 登录回调 /users/auth/oauth2_generic/callback。
+
+            学校的 CAS 有时鉴权成功后回调 code 是空的：
+              - code 为空：让浏览器重新跳去 CAS 授权页重新走一遍鉴权，
+                state 保持和这次请求里的一致（GitLab 后面校验 state 时
+                认的还是最初存进 session 的那个值）。
+              - code 非空：代理代替浏览器，直接向 GitLab webservice 内部
+                地址发起同样的 GET /users/auth/oauth2_generic/callback
+                请求（带上浏览器原始 Cookie，这样 Rails session 才能对上，
+                state 校验才会通过），拿到 GitLab 返回的 302 Location 和
+                Set-Cookie 后，原样转发给浏览器，让浏览器完成最后一跳。
+            """
+            params = parse_qs(query_string) if query_string else {}
+            code = (params.get("code") or [""])[0]
+            state = (params.get("state") or [""])[0]
+
+            if not code:
+                logger.warning("CAS 回调 code 为空（state=%s），引导用户重新鉴权", state)
+                authorize_params = {
+                    "client_id": CAS_CLIENT_ID,
+                    "redirect_uri": CAS_REDIRECT_URI,
+                    "response_type": "code",
+                    "scope": CAS_SCOPE,
+                    "state": state,
+                }
+                redirect_url = f"{CAS_AUTHORIZE_URL}?{urlencode(authorize_params, quote_via=quote)}"
+                self._send_redirect(redirect_url)
+                return
+
+            self._impersonate_gitlab_callback(code, state)
+
+        def _impersonate_gitlab_callback(self, code: str, state: str) -> None:
+            forward_path = f"{CALLBACK_PATH}?{urlencode({'code': code, 'state': state})}"
+
+            forward_headers = self._build_forward_headers(extra_exclude=("host",))
+            # 让 Rails 认为这条请求本来就是通过 https 转发进来的：
+            # 外部域名放进 Host，同时补上标准的转发协议头。
+            forward_headers["Host"] = EXTERNAL_HOST
+            forward_headers["X-Forwarded-Proto"] = "https"
+            forward_headers["X-Forwarded-Ssl"] = "on"
+            forward_headers["X-Forwarded-Host"] = EXTERNAL_HOST
+
+            conn = http.client.HTTPConnection(
+                GITLAB_WEBSERVICE_HOST, GITLAB_WEBSERVICE_PORT, timeout=UPSTREAM_TIMEOUT_SECONDS
+            )
+            try:
+                conn.request("GET", forward_path, headers=forward_headers)
+                response = conn.getresponse()
+                status = response.status
+                location = response.getheader("Location")
+                set_cookies = response.msg.get_all("Set-Cookie") or []
+                raw = self._decompress_body(response.read(), response.getheader("Content-Encoding"))
+            except OSError as exc:
+                logger.error("向 GitLab webservice（%s:%s）发起冒充请求失败: %s", GITLAB_WEBSERVICE_HOST, GITLAB_WEBSERVICE_PORT, exc)
+                self._send_json(HTTPStatus.BAD_GATEWAY, {"error": "failed to reach gitlab webservice"})
+                return
+            finally:
+                conn.close()
+
+            if location:
+                logger.info("GitLab 回调处理完成，302 -> %s", location)
+                self._send_redirect(location, extra_set_cookies=set_cookies)
+                return
+
+            # GitLab 没有返回跳转（比如报错页），把原始响应状态和内容原样转发，
+            # 方便定位问题，也带上它可能设置的 cookie。
+            logger.warning("GitLab 回调响应没有 Location 头，状态码: %s，原样转发响应内容", status)
+            self._send_raw(status, response.getheader("Content-Type"), raw, extra_set_cookies=set_cookies)
+
+        def _send_redirect(self, location: str, extra_set_cookies: list[str] | None = None) -> None:
+            self.send_response(HTTPStatus.FOUND)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            for cookie in extra_set_cookies or []:
+                self.send_header("Set-Cookie", cookie)
+            self.end_headers()
 
         def _extract_access_token(self, query_string: str) -> str | None:
             """从 Authorization 头或 query string 里取出 access token，前者优先。"""
@@ -278,11 +311,19 @@ data:
                 return zlib.decompress(data)
             return data
 
-        def _send_raw(self, status: int, content_type: str | None, data: bytes) -> None:
-            """原样透传上游响应（用于 accessToken 换取接口，不做 JSON 解析或改写）。"""
+        def _send_raw(
+            self,
+            status: int,
+            content_type: str | None,
+            data: bytes,
+            extra_set_cookies: list[str] | None = None,
+        ) -> None:
+            """原样透传上游响应（用于 accessToken 换取接口和回调兜底分支，不做 JSON 解析或改写）。"""
             self.send_response(status)
             self.send_header("Content-Type", content_type or "application/json")
             self.send_header("Content-Length", str(len(data)))
+            for cookie in extra_set_cookies or []:
+                self.send_header("Set-Cookie", cookie)
             self.end_headers()
             self.wfile.write(data)
 
@@ -301,12 +342,16 @@ data:
     def main() -> None:
         server = ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), ProfileProxyHandler)
         logger.info(
-            "代理服务已启动，监听端口 %d；%s -> %s（token 转发到 query string）；%s -> %s（client 认证转发到 form body）",
+            "代理服务已启动，监听端口 %d；%s -> %s（token 转发到 query string）；"
+            "%s -> %s（client 认证转发到 form body）；%s -> %s:%d（接管登录回调）",
             LISTEN_PORT,
             PROXY_PATH,
             UPSTREAM_URL,
             ACCESS_TOKEN_PATH,
             ACCESS_TOKEN_UPSTREAM_URL,
+            CALLBACK_PATH,
+            GITLAB_WEBSERVICE_HOST,
+            GITLAB_WEBSERVICE_PORT,
         )
         try:
             server.serve_forever()
@@ -392,3 +437,24 @@ spec:
     - name: http
       port: 8000
       targetPort: 8000
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: oauth2-profile-proxy
+  namespace: gitlab
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: >-
+        Host(`git.hust.edu.cn`) &&
+        PathPrefix(`/users/auth/oauth2_generic/callback`)
+      kind: Rule
+      priority: 100
+      services:
+        - name: oauth2-profile-proxy
+          port: 8000
+  tls:
+    secretName: gitlab-cert-tls
