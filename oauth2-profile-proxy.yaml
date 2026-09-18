@@ -77,8 +77,10 @@ data:
     from __future__ import annotations
 
     import base64
+    import gzip
     import json
     import logging
+    import zlib
     from http import HTTPStatus
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.error import HTTPError, URLError
@@ -180,15 +182,11 @@ data:
             # 不再转发 Authorization 头（上游不识别）。
             upstream_url = f"{UPSTREAM_URL}?{urlencode({ACCESS_TOKEN_PARAM: access_token})}"
 
-            forward_headers = {
-                key: value
-                for key, value in self.headers.items()
-                if key.lower() not in ("host", "content-length", "authorization")
-            }
+            forward_headers = self._build_forward_headers(extra_exclude=("authorization",))
 
             request = Request(upstream_url, data=body, headers=forward_headers, method=method)
             with urlopen(request, timeout=UPSTREAM_TIMEOUT_SECONDS) as response:
-                raw = response.read()
+                raw = self._decompress_body(response.read(), response.getheader("Content-Encoding"))
             return json.loads(raw)
 
         def _handle_access_token_request(self, body: bytes | None) -> None:
@@ -213,11 +211,7 @@ data:
             form_fields.append(("client_secret", client_secret))
             new_body = urlencode(form_fields).encode("utf-8")
 
-            forward_headers = {
-                key: value
-                for key, value in self.headers.items()
-                if key.lower() not in ("host", "content-length", "authorization")
-            }
+            forward_headers = self._build_forward_headers(extra_exclude=("authorization",))
             forward_headers["Content-Type"] = "application/x-www-form-urlencoded"
             forward_headers["Content-Length"] = str(len(new_body))
 
@@ -226,10 +220,12 @@ data:
             )
             try:
                 with urlopen(request, timeout=UPSTREAM_TIMEOUT_SECONDS) as response:
-                    self._send_raw(response.status, response.getheader("Content-Type"), response.read())
+                    raw = self._decompress_body(response.read(), response.getheader("Content-Encoding"))
+                    self._send_raw(response.status, response.getheader("Content-Type"), raw)
             except HTTPError as exc:
                 logger.warning("accessToken 上游返回错误状态码: %s", exc.code)
-                self._send_raw(exc.code, exc.headers.get("Content-Type"), exc.read())
+                raw = self._decompress_body(exc.read(), exc.headers.get("Content-Encoding"))
+                self._send_raw(exc.code, exc.headers.get("Content-Type"), raw)
             except URLError as exc:
                 logger.error("请求 accessToken 上游失败: %s", exc)
                 self._send_json(HTTPStatus.BAD_GATEWAY, {"error": "failed to reach upstream"})
@@ -250,6 +246,37 @@ data:
             if not client_id or not client_secret:
                 return None
             return client_id, client_secret
+
+        def _build_forward_headers(self, extra_exclude: tuple[str, ...] = ()) -> dict:
+            """
+            构造转发给上游的请求头。
+
+            始终去掉 Accept-Encoding：如果原样转发调用方（GitLab）的
+            Accept-Encoding: gzip，上游会返回 gzip 压缩的响应体，而这个
+            标准库实现不会自动解压，会导致后续 JSON 解析/透传拿到一堆
+            压缩后的二进制（表现为 GitLab 日志里的
+            "invalid symbol in encoding UTF-8" / gzip 魔数 \\x1f\\x8b）。
+            不请求压缩最省事：上游会用未压缩的方式返回。
+            """
+            excluded = {"host", "content-length", "accept-encoding", *extra_exclude}
+            return {
+                key: value
+                for key, value in self.headers.items()
+                if key.lower() not in excluded
+            }
+
+        @staticmethod
+        def _decompress_body(data: bytes, content_encoding: str | None) -> bytes:
+            """
+            防御性解压：即便已经不请求压缩，万一上游仍然返回了压缩内容
+            （忽略 Accept-Encoding 或本身固定返回压缩格式），也能正确处理。
+            """
+            encoding = (content_encoding or "").strip().lower()
+            if encoding == "gzip":
+                return gzip.decompress(data)
+            if encoding == "deflate":
+                return zlib.decompress(data)
+            return data
 
         def _send_raw(self, status: int, content_type: str | None, data: bytes) -> None:
             """原样透传上游响应（用于 accessToken 换取接口，不做 JSON 解析或改写）。"""
