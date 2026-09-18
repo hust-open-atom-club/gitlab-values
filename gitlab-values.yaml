@@ -74,11 +74,12 @@ global:
         key: connection
     omniauth:
       enabled: true
-      allowSingleSignOn: ['openid_connect']
+      allowSingleSignOn: ['openid_connect', 'oauth2_generic']
       blockAutoCreatedUsers: false
       autoLinkUser: true
       providers:
         - secret: gitlab-hoac-oidc
+        - secret: gitlab-hustpass-oauth2
 
     artifacts:
       bucket: gitlab-artifacts

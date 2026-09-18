@@ -1,0 +1,18 @@
+name: "oauth2_generic"
+label: "HustPass"
+app_id: "REDACTED"
+app_secret: "REDACTED"
+args:
+  client_options:
+    site: "https://pass.hust.edu.cn"
+    user_info_url: "https://git.hust.edu.cn/users/auth/oauth2_generic/profile"
+    authorize_url: "/cas/oauth2.0/authorize"
+    token_url: "/cas/oauth2.0/accessToken"
+  user_response_structure:
+    root_path: []
+    id_path: ["id"]
+    attributes:
+      email: "email"
+  authorize_params:
+    scope: "openid profile email"
+  strategy_class: "OmniAuth::Strategies::OAuth2Generic"
