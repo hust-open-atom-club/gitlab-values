@@ -21,8 +21,8 @@ from urllib.request import Request, urlopen
 
 LISTEN_PORT = 8000
 PROXY_PATH = "/api/profile"
-UPSTREAM_URL = "http://example.com/oauth2/profile"
-EMAIL_DOMAIN = "@example.com"
+UPSTREAM_URL = "https://pass.hust.edu.cn/cas/oauth2.0/profile"
+EMAIL_DOMAIN = "@hust.edu.cn"
 UPSTREAM_TIMEOUT_SECONDS = 10
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
