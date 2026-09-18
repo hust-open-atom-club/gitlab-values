@@ -86,8 +86,8 @@ data:
     from urllib.request import Request, urlopen
 
     LISTEN_PORT = 8000
-    PROXY_PATH = "/users/auth/oauth2_generic/profile"
-    ACCESS_TOKEN_PATH = "/users/auth/oauth2_generic/accessToken"
+    PROXY_PATH = "/profile"
+    ACCESS_TOKEN_PATH = "/accessToken"
     HEALTHZ_PATH = "/healthz"
     UPSTREAM_URL = "https://pass.hust.edu.cn/cas/oauth2.0/profile"
     ACCESS_TOKEN_UPSTREAM_URL = "https://pass.hust.edu.cn/cas/oauth2.0/accessToken"
@@ -365,25 +365,3 @@ spec:
     - name: http
       port: 8000
       targetPort: 8000
-
----
-# 用 Traefik 的 IngressRoute CRD 拦截 /api/profile，转发到上面的 Service。
-# priority 设得比 GitLab chart 自动生成的 Ingress 更高，确保这条路径优先匹配，
-# 不会被 GitLab webservice 的默认路由（PathPrefix `/`）抢先接管。
-apiVersion: traefik.io/v1alpha1
-kind: IngressRoute
-metadata:
-  name: oauth2-profile-proxy
-  namespace: gitlab
-spec:
-  entryPoints:
-    - websecure
-  routes:
-    - match: Host(`git.hust.edu.cn`) && ( PathPrefix(`/users/auth/oauth2_generic/profile`) || PathPrefix(`/users/auth/oauth2_generic/accessToken`) )
-      kind: Rule
-      priority: 100
-      services:
-        - name: oauth2-profile-proxy
-          port: 8000
-  tls:
-    secretName: gitlab-cert-tls
