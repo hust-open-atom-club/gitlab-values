@@ -25,3 +25,19 @@ spec:
   postgresql:
     parameters:
       max_locks_per_transaction: "512"
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: gitlab-pooler
+  namespace: gitlab
+spec:
+  cluster:
+    name: gitlab-db
+  instances: 3
+  type: rw
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      max_client_conn: "1000"
+      default_pool_size: "25"

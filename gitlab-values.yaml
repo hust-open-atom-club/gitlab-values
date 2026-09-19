@@ -49,7 +49,7 @@ global:
 
 
   psql:
-    host: gitlab-db-rw.gitlab.svc.cluster.local
+    host: gitlab-pooler.gitlab.svc.cluster.local
     port: 5432
     database: gitlabhq_production
     username: gitlab
