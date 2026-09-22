@@ -9,7 +9,7 @@ global:
     registry:
       name: registry.git.hust.edu.cn
     ssh: git.hust.edu.cn
-    externalIP: REDACTED
+    externalIP: 222.20.126.70
     https: true
 
   shell:
@@ -74,12 +74,12 @@ global:
         key: connection
     omniauth:
       enabled: true
-      allowSingleSignOn: ['openid_connect', 'oauth2_generic']
+      allowSingleSignOn: ['oauth2_generic', 'openid_connect']
       blockAutoCreatedUsers: false
       autoLinkUser: true
       providers:
-        - secret: gitlab-hoac-oidc
         - secret: gitlab-hustpass-oauth2
+        - secret: gitlab-hoac-oidc
 
     artifacts:
       bucket: gitlab-artifacts
@@ -153,10 +153,16 @@ registry:
 gitlab-runner:
   enabled: true
   runners:
-    privileged: true
+    privileged: false
     config: |
       [[runners]]
         [runners.kubernetes]
+        cpu_limit = "2"
+        memory_limit = "4Gi"
+        service_cpu_limit = "2"
+        service_memory_limit = "4Gi"
+        helper_cpu_limit = "500m"
+        helper_memory_limit = "100Mi"
         image = "ubuntu:26.04"
 
 gitlab-exporter:
