@@ -80,6 +80,7 @@ global:
       providers:
         - secret: gitlab-hustpass-oauth2
         - secret: gitlab-hoac-oidc
+        - secret: gitlab-github-oauth
 
     artifacts:
       bucket: gitlab-artifacts
