@@ -78,14 +78,7 @@ spec:
 
 ---
 # ---------- GitLab: registry ----------
-# !! 当前 gitlab-registry Service 只有 http-registry(5000) 端口 !!
-# !! 说明 registry metrics 尚未开启，需先在 values.yaml 加: !!
-#   registry:
-#     metrics:
-#       enabled: true
-# 开启后 Service 会新增一个 metrics 端口(通常是 5001)，
-# 再取消下面注释并确认端口名后使用
-#
+# 已启用 registry metrics，http-metrics 端口为 5001。
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -193,6 +186,7 @@ spec:
     matchLabels:
       app.kubernetes.io/name: seaweedfs
       app.kubernetes.io/component: filer
+      monitoring: "true"
   endpoints:
     - port: metrics
       path: /metrics
@@ -235,3 +229,25 @@ spec:
   podMetricsEndpoints:
     - port: metrics           # CNPG 固定用名为 "metrics" 的端口，对应 9187
       interval: 30s
+
+---
+# Sidekiq 已启用 http-metrics (3807)，仅补充采集，无需重启 Pod。
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: gitlab-sidekiq
+  namespace: gitlab
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: sidekiq
+      release: gitlab
+  podMetricsEndpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 30s
+      relabelings:
+        - targetLabel: job
+          replacement: gitlab-sidekiq
