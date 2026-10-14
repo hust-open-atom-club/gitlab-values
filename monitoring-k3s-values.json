@@ -1,0 +1,59 @@
+{
+  "defaultRules": {
+    "disabled": {
+      "KubeControllerManagerDown": true,
+      "KubeSchedulerDown": true,
+      "KubeProxyDown": true
+    }
+  },
+  "additionalPrometheusRulesMap": {
+    "k3s-components": {
+      "groups": [
+        {
+          "name": "k3s-components",
+          "rules": [
+            {
+              "alert": "KubeControllerManagerDown",
+              "annotations": {
+                "description": "当前 hoac-git 集群的 K3s Controller Manager 指标通过 apiserver job 采集；指标连续缺失 15 分钟。",
+                "runbook_url": "https://runbooks.prometheus-operator.dev/runbooks/kubernetes/kubecontrollermanagerdown",
+                "summary": "K3s Controller Manager 指标不可用"
+              },
+              "expr": "absent(workqueue_depth{job=\"apiserver\",name=\"node_lifecycle_controller\"})",
+              "for": "15m",
+              "labels": {
+                "severity": "critical"
+              }
+            },
+            {
+              "alert": "KubeProxyDown",
+              "annotations": {
+                "description": "当前 hoac-git 集群的 K3s kube-proxy 指标通过 apiserver job 采集；指标连续缺失 15 分钟。",
+                "runbook_url": "https://runbooks.prometheus-operator.dev/runbooks/kubernetes/kubeproxydown",
+                "summary": "K3s kube-proxy 指标不可用"
+              },
+              "expr": "absent(kubeproxy_sync_proxy_rules_duration_seconds_count{job=\"apiserver\"})",
+              "for": "15m",
+              "labels": {
+                "severity": "critical"
+              }
+            },
+            {
+              "alert": "KubeSchedulerDown",
+              "annotations": {
+                "description": "当前 hoac-git 集群的 K3s Scheduler 指标通过 apiserver job 采集；指标连续缺失 15 分钟。",
+                "runbook_url": "https://runbooks.prometheus-operator.dev/runbooks/kubernetes/kubeschedulerdown",
+                "summary": "K3s Scheduler 指标不可用"
+              },
+              "expr": "absent(scheduler_pending_pods{job=\"apiserver\"})",
+              "for": "15m",
+              "labels": {
+                "severity": "critical"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
