@@ -33,7 +33,16 @@ kubectl --context hoac-git apply -f monitoring-dashboards/
 
 ## 验证
 
-Prometheus 中应有两个健康的 `up{job="gitlab-sidekiq"}` 目标，且不再有 `up{job="seaweedfs-filer-client"}`。
+Prometheus 中健康的 `up{job="gitlab-sidekiq"}` 目标数量应与当前 Sidekiq 就绪副本数一致，且不再有 `up{job="seaweedfs-filer-client"}`。
 三个组件 Down 告警应为 inactive；对应 Grafana 面板不再使用独立 kube-controller-manager/kube-scheduler/kube-proxy job。
 
 35 条 Grafana 管理的告警及 GitLab 面板保存在 Grafana 数据库中，应随 Grafana PVC 备份；规则直接使用“飞书告警”卡片通知。未对历史 Sidekiq dead 任务或累计错误设置存量告警，SMART exit 4 已忽略。
+
+## Grafana 配置备份
+
+`grafana-dashboards/` 保存本次修正后的 GitLab Overview、Gitaly、Sidekiq 面板 JSON，可通过 Grafana Import 恢复到 Gitlab 文件夹。
+`grafana-alerts.provisioning.json` 保存 35 条告警的官方导出格式，覆盖 K8s、PVC、镜像站、SMART、GitLab、CNPG、SeaweedFS、ValKey。SQL 规则内的常驻容器名称和硬盘序列号应在更换设备/容器时更新。
+
+当前告警仍由 Grafana UI 维护；此文件是导出备份，恢复时不要让文件 provisioning 与 UI 同时维护同一批规则。恢复前需创建同名的“飞书告警”接收器。Webhook 地址和 Grafana 密码没有保存到这些文件中。
+
+Sidekiq RSS 面板使用 `ruby_process_resident_memory_bytes`，按 Pod/进程分别展示；旧 `sidekiq_mem_total_bytes` 是任务分配内存指标，不能代表进程 RSS，见 [GitLab 官方指标说明](https://docs.gitlab.com/administration/monitoring/prometheus/gitlab_metrics/)。
